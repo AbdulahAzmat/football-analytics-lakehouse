@@ -1,6 +1,6 @@
 # Football Analytics Lakehouse
 
-An end-to-end Medallion Architecture (Bronze/Silver/Gold) data pipeline for football match, standings, and performance analytics — built with Spark on Databricks Community Edition, sourced from [football-data.org](https://www.football-data.org/), visualized in Power BI.
+An end-to-end Medallion Architecture (Bronze/Silver/Gold) data pipeline for football match, standings, and performance analytics — built with Spark on Databricks Free Edition, sourced from [football-data.org](https://www.football-data.org/), visualized in Power BI.
 
 Data Engineering — Semester Project, Phase 1.
 
