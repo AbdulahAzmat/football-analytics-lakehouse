@@ -8,17 +8,33 @@ Data Engineering — Semester Project, Phase 1.
 
 **football-data.org REST API (v4)**, free tier. Verified live against the API on 2026-09-27 with a real registered key — see `docs/api-verification.md` for the exact endpoints tested and their results, including where the free tier's real limits differ from what's documented on the football-data.org site.
 
-Tracked competitions: Premier League (PL), UEFA Champions League (CL), La Liga (PD), Bundesliga (BL1), Serie A (SA), Ligue 1 (FL1).
+Tracked competitions: all 12 available on the free tier, confirmed against the live API — Premier League (PL), Championship (ELC), La Liga (PD), Bundesliga (BL1), Serie A (SA), Ligue 1 (FL1), Eredivisie (DED), Primeira Liga (PPL), Campeonato Brasileiro Série A (BSA), UEFA Champions League (CL), European Championship (EC), FIFA World Cup (WC).
+
+Seasons: 2023/24 onward. The free tier returns HTTP 403 for season 2022 and earlier.
 
 ## Repository structure
 
 ```
-data/samples/       Real sample payloads pulled from the live API (full load + incremental)
+data/samples/       Curated sample payloads (one full-load + one incremental example)
+data/full_load/     Complete historical extraction: 76 files, 15.87 MB, 14,001 matches
 notebooks/bronze/   Raw ingestion notebooks (PySpark)
 notebooks/silver/   Cleaning & conformance notebooks
 notebooks/gold/     Dimensional modeling notebooks
-docs/                Verification notes, volume estimates, data model
+docs/               Verification notes, volume figures, data model
 ```
+
+## Dataset at a glance (measured, pulled 2026-09-27)
+
+| | |
+|---|---|
+| Match records | **14,001** |
+| Team records | 284 |
+| Squad player records | 7,149 |
+| Standings rows | 212 |
+| Scorer rows | 600 |
+| Total size | **15.87 MB** across 76 JSON files |
+
+Largest competition is the Championship (2,223 matches over 4 seasons, 24 teams). See `docs/volume-estimate.md` for the full per-competition breakdown.
 
 ## Sample data
 

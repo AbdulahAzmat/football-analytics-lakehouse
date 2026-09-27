@@ -25,7 +25,13 @@ Verified live on **2026-09-27** using a real registered free-tier API key. This 
 
 3. **Rate limiting is not a real constraint for this project's volume.** A full backfill across 6 competitions × 4 seasons (matches + teams + standings) is roughly 30–40 calls total. At 10 req/min that's under 5 minutes of paced calls — not the bottleneck the original proposal implied.
 
+4. **The free tier covers 12 competitions, not 6.** The `plan: TIER_ONE` field on `/v4/competitions` lists exactly 12 free competitions: PL, ELC, PD, BL1, SA, FL1, DED, PPL, BSA, CL, EC, WC. The original proposal tracked only 6, leaving half the available data unused. **Fix applied:** scope expanded to all 12, which roughly doubled the dataset from ~7,000 to 14,001 match records.
+
+## Full pull (2026-09-27)
+
+The complete historical extraction was subsequently run across all 12 competitions for seasons 2023–2026: 76 files, 15.87 MB, 14,001 match records. 8 of 84 calls returned HTTP 404, all for EC/WC in years those tournaments were not held and standings for those two cups (which have no league table). Full figures in `docs/volume-estimate.md`.
+
 ## Caveats
 
-- Only Premier League was pulled at full depth for cost/time reasons during proposal verification; the other five competitions were confirmed *accessible* (200 on their base endpoint) but not fully pulled. Volume estimates for the other five leagues in `docs/volume-estimate.md` are extrapolated from Premier League's per-season size, not independently measured — cup competitions like the Champions League have a different match count/structure and may vary from this estimate.
+- Volume figures are now measured rather than extrapolated. The earlier estimate in this document (based on Premier League only) proved close: predicted ~14,000 matches and ~16 MB against an actual 14,001 and 15.87 MB.
 - "Current season" behaves as expected from the API's own season-numbering: querying `season=2025` returns the just-completed 2025/26 season; the true in-progress season is queried without a `season` parameter (defaults to it) or explicitly as the current year.
