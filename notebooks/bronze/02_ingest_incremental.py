@@ -13,7 +13,10 @@ API_TOKEN = dbutils.secrets.get(scope="football-lakehouse", key="football_data_t
 BASE_URL = "https://api.football-data.org/v4"
 HEADERS = {"X-Auth-Token": API_TOKEN}
 
-TRACKED_COMPETITIONS = ["PL", "CL", "PD", "BL1", "SA", "FL1"]
+TRACKED_COMPETITIONS = [
+    "PL", "ELC", "PD", "BL1", "SA", "FL1",
+    "DED", "PPL", "BSA", "CL", "EC", "WC",
+]
 
 
 def fetch_incremental(date_from: str, date_to: str) -> dict:

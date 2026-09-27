@@ -13,8 +13,25 @@ API_TOKEN = dbutils.secrets.get(scope="football-lakehouse", key="football_data_t
 BASE_URL = "https://api.football-data.org/v4"
 HEADERS = {"X-Auth-Token": API_TOKEN}
 
-COMPETITIONS = ["PL", "CL", "PD", "BL1", "SA", "FL1"]
-SEASONS = [2023, 2024, 2025]  # verified accessible on free tier — see docs/api-verification.md
+# All 12 TIER_ONE (free tier) competitions, confirmed against the live API.
+# See docs/api-verification.md.
+COMPETITIONS = [
+    "PL",   # Premier League
+    "ELC",  # Championship
+    "PD",   # La Liga
+    "BL1",  # Bundesliga
+    "SA",   # Serie A
+    "FL1",  # Ligue 1
+    "DED",  # Eredivisie
+    "PPL",  # Primeira Liga
+    "BSA",  # Campeonato Brasileiro Serie A
+    "CL",   # UEFA Champions League
+    "EC",   # European Championship (quadrennial)
+    "WC",   # FIFA World Cup (quadrennial)
+]
+
+# Free tier blocks season 2022 and earlier (HTTP 403); 2023 onward works.
+SEASONS = [2023, 2024, 2025, 2026]
 
 
 def fetch_matches(competition_code: str, season: int) -> dict:

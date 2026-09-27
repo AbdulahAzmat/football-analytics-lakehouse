@@ -1,46 +1,62 @@
-# Volume & Frequency Estimate (Section 2.2)
+# Volume & Frequency (Section 2.2)
 
-Based on real measured pulls (see `docs/api-verification.md`), not assumption.
+These are measured figures from a real full pull, not projections. The complete historical extraction was run on 2026-09-27 against the live API.
 
-## Measured baseline (Premier League, real data)
+## Full load, as actually pulled
 
-| Item | Measured size | Basis |
+All 12 free-tier competitions, seasons 2023/24 through 2026/27.
+
+| Metric | Measured |
+|---|---|
+| Total size | **15,871,684 bytes (15.87 MB)** |
+| Files | 76 JSON |
+| Match records | **14,001** |
+| Team records | 284 |
+| Squad player records | 7,149 |
+| Standings rows | 212 |
+| Scorer rows | 600 |
+| Wall-clock time | ~9 minutes (paced at 10 req/min) |
+
+### Matches per competition (4 seasons combined)
+
+| Competition | Matches | Note |
 |---|---|---|
-| One season of matches (380 matches) | ~383 KB | `full_load_sample_pl_2025-26.json` |
-| Per match | ~1,032 bytes | 392,073 bytes / 380 matches |
-| Team + squad metadata (20 teams) | ~88 KB | `full_load_sample_pl_teams.json` |
-| Standings snapshot | ~5.5 KB | `full_load_sample_pl_standings.json` |
-| One matchday, 5 competitions (20 matches) | ~20.2 KB | `incremental_load_sample_2026-09-20.json` |
+| ELC (Championship) | 2,223 | Largest: 24 teams, 552 matches/season |
+| BSA (Brasileirão) | 1,520 | |
+| PD (La Liga) | 1,520 | |
+| PL (Premier League) | 1,520 | |
+| SA (Serie A) | 1,520 | |
+| BL1 (Bundesliga) | 1,224 | 18 teams |
+| DED (Eredivisie) | 1,224 | |
+| FL1 (Ligue 1) | 1,224 | |
+| PPL (Primeira Liga) | 1,224 | |
+| CL (Champions League) | 647 | Multi-stage format |
+| WC (World Cup) | 104 | Quadrennial |
+| EC (European Championship) | 51 | Quadrennial |
 
-## Full load estimate (all 6 tracked competitions, 4 seasons: 2023/24–2025/26 + current)
+### Expected failures
 
-Extrapolated from the Premier League baseline, assuming similar per-match payload size across leagues (PD/BL1/SA are structurally similar to PL; FL1 has slightly fewer matches per season at 18 teams; CL has a different format and is harder to estimate precisely without pulling it — flagged as a caveat below):
+8 of the 84 planned calls returned HTTP 404, all for EC and WC in years those tournaments were not held (EC 2023/2025/2026, WC 2023/2024/2025), plus standings for EC and WC, which are knockout cups and have no league table. These are correct API behaviour, not access problems.
 
-- Matches: 6 competitions × ~350 avg matches/season × 4 seasons × ~1,032 bytes ≈ **~8.7 MB**
-- Team/squad metadata: 6 competitions × ~88 KB (one current snapshot each) ≈ **~530 KB**
-- Standings snapshots: 6 competitions × ~5.5 KB ≈ **~33 KB**
-- Scorers: 6 competitions × ~5 KB ≈ **~30 KB**
+## Incremental load
 
-**Estimated total full load: ~9.3 MB.**
+Measured: one active matchday across 5 competitions = 20,697 bytes for 20 matches (~1,030 bytes/match).
 
-This is comfortably inside Databricks Community Edition's free-tier DBFS storage limits, with wide headroom for growth (adding more seasons or competitions would need to 50–100x before it became a real constraint).
+- Daily run on match days: **~15 to 30 KB**
+- Daily run on rest days: near zero (empty `matches` array, ~157 bytes)
+- Weekly: **~100 to 150 KB**
+- Monthly: **~400 to 600 KB**
 
-## Incremental load estimate
+## Projected Bronze size at end of semester
 
-Measured: one active matchday across 5 competitions ≈ 20.2 KB for 20 matches.
+Full load (15.87 MB) + ~10 weeks of incrementals (~1.5 MB) ≈ **~17 MB**.
 
-- Match days occur roughly 3–4 times per week per competition during an active season, with a full "matchday" (10 PL matches, etc.) landing on the same 1–2 days per week per league — so a daily incremental pull frequently returns 0 matches (rest days) and occasionally returns the ~20 KB batch above.
-- **Estimated daily incremental average (across an active season): ~15–30 KB on match days, near 0 on rest days.**
-- **Estimated weekly incremental total: ~100–150 KB** across all 6 tracked competitions.
-- **Estimated monthly incremental total: ~400–600 KB.**
+Comfortably inside Databricks Community Edition's free-tier DBFS limits.
 
-## Rate-limit math for the full backfill
+## Rate limiting
 
-Free tier: 10 requests/minute.
+Free tier allows 10 requests/minute. The full backfill is 84 calls, which completed in about 9 minutes at 7-second spacing. Not a practical constraint.
 
-- Full load: 6 competitions × 4 seasons (matches) + 6 competitions (teams) + 6 competitions (standings) + 6 competitions (scorers) = **~48 requests**.
-- At 10 req/min with safe pacing (~6–7 sec between calls), the full historical backfill completes in **under 6 minutes**. Rate limiting is not a practical bottleneck for this project's scope.
+## Honest note on scale
 
-## Caveat
-
-Only Premier League was pulled at full depth to produce these measurements (see `docs/api-verification.md`). The other five competitions were confirmed accessible but not fully measured — actual sizes for Champions League in particular may differ meaningfully from this estimate given its multi-stage format (league phase + knockout rounds) versus a flat round-robin league season.
+At ~14,000 match rows and ~16 MB, this dataset is small by Spark standards. It is large enough to demonstrate every Medallion technique the project requires (partitioning, dedup, SCD, star schema, incremental merge), but it would also fit in memory on a single machine. Using all 12 free competitions rather than a subset roughly doubled the row count; going further would require a paid tier, which is out of scope for this project. Modelling matches at team-match grain (one row per team per match) doubles the fact table to ~28,000 rows, and per-matchday standings snapshots would add substantially more if finer granularity is wanted in Phase 2.
