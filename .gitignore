@@ -1,0 +1,19 @@
+# Secrets — never commit API keys or tokens
+.env
+*.env
+secrets.json
+**/api_key.txt
+
+# Databricks / Spark
+.databricks/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Large raw pulls (only curated samples belong in the repo)
+data/raw/
+data/full_pulls/
