@@ -51,7 +51,7 @@ Measured: one active matchday across 5 competitions = 20,697 bytes for 20 matche
 
 Full load (15.87 MB) + ~10 weeks of incrementals (~1.5 MB) ≈ **~17 MB**.
 
-Comfortably inside Databricks Community Edition's free-tier DBFS limits.
+Comfortably inside Databricks Free Edition's default storage. (Community Edition was retired on 1 January 2026 and replaced by Free Edition, which is serverless and quota-limited.)
 
 ## Rate limiting
 
