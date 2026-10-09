@@ -1,0 +1,20 @@
+{
+  "competitions": [
+    {
+      "competition_id": 9,
+      "season_id": 281,
+      "competition_name": "1. Bundesliga",
+      "season_name": "2023/2024",
+      "matches": 34
+    },
+    {
+      "competition_id": 7,
+      "season_id": 235,
+      "competition_name": "Ligue 1",
+      "season_name": "2022/2023",
+      "matches": 32
+    }
+  ],
+  "files": 135,
+  "bytes": 232767779
+}
