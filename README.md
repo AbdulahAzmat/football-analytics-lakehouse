@@ -618,11 +618,11 @@ Note `load_timestamp` is deliberately distinct from `source_last_updated`, which
 
 #### `silver_sb_matches`  (66 rows)
 
-**Primary key:** 
+**Primary key:** `match_id`
 
 | column | type | PK |
 |---|---|---|
-| `match_id` | bigint |  |
+| `match_id` | bigint | Y |
 | `match_date` | date |  |
 | `kick_off` | string |  |
 | `competition_id` | bigint |  |

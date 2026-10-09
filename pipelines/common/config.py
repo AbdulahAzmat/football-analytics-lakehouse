@@ -60,6 +60,7 @@ MERGE_KEYS = {
     "silver_teams":         ["competition_code", "team_id"],
     "silver_events":        ["event_id"],
     "silver_lineups":       ["match_id", "team_id", "player_id"],
+    "silver_sb_matches":    ["match_id"],
 }
 
 # Columns every table carries (requirement: metadata integration).
