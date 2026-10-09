@@ -17,3 +17,10 @@ Thumbs.db
 # Large raw pulls (only curated samples belong in the repo)
 data/raw/
 data/full_pulls/
+
+# Local Spark / venv artefacts
+.venv-spark/
+spark-warehouse/
+metastore_db/
+derby.log
+/tmp/lakehouse*
