@@ -31,41 +31,71 @@ print("lake :", LAKE)
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 1. Ingest raw data into DBFS
+# MAGIC ## 1. Get raw data into DBFS
 # MAGIC
-# MAGIC Databricks Repos drops large files, so the data is downloaded directly
-# MAGIC rather than relying on the clone. ~233 MB, a few minutes.
-
-# COMMAND ----------
-
-RAW = "/dbfs/FileStore/football_lakehouse/raw"     # FUSE path for python file IO
-
-r = subprocess.run([sys.executable, f"{REPO}/scripts/ingest_statsbomb.py",
-                    "--out", f"{RAW}/statsbomb"],
-                   capture_output=True, text=True, cwd=REPO)
-print(r.stdout[-3000:])
-print(r.stderr[-2000:] if r.returncode else "")
-assert r.returncode == 0, "StatsBomb ingest failed"
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ### football-data.org full load
+# MAGIC Whether the committed data survives the Repos clone varies by workspace
+# MAGIC and file size, so this detects rather than assumes:
 # MAGIC
-# MAGIC Fetched from GitHub rather than copied out of the Repo, because Repos
-# MAGIC does not bring the large committed files down with the clone - that is
-# MAGIC why `data/` looks empty in the workspace. These are the same bytes that
-# MAGIC are committed (verified by checksum), so the run is reproducible and no
-# MAGIC API key is needed here.
+# MAGIC * **data present in the Repo** - copy it across (seconds, no network)
+# MAGIC * **data absent** - download it (~233 MB, several minutes)
+# MAGIC
+# MAGIC Either way the pipeline reads from DBFS, so everything downstream is
+# MAGIC identical.
 
 # COMMAND ----------
 
-r = subprocess.run([sys.executable, f"{REPO}/scripts/fetch_committed_raw.py",
-                    "--out", f"{RAW}/football-data/full_load"],
-                   capture_output=True, text=True, cwd=REPO)
-print(r.stdout[-2000:])
-print(r.stderr[-1000:] if r.returncode else "")
-assert r.returncode == 0, "football-data fetch failed"
+RAW = "/dbfs/FileStore/football_lakehouse/raw"     # FUSE path, for python file IO
+RAW_URI = f"{LAKE}/raw"                            # dbfs: URI, for Spark
+
+
+def dir_bytes(p: str) -> int:
+    out = subprocess.run(["du", "-sb", p], capture_output=True, text=True).stdout
+    try:
+        return int(out.split()[0])
+    except Exception:
+        return 0
+
+
+sb_local = f"{REPO}/data/statsbomb"
+fd_local = f"{REPO}/data/full_load"
+sb_have = dir_bytes(sb_local) > 100_000_000      # expect ~233 MB
+fd_have = dir_bytes(fd_local) > 10_000_000       # expect ~16 MB
+
+print(f"StatsBomb in repo    : {dir_bytes(sb_local)/1e6:7.1f} MB  -> {'COPY' if sb_have else 'DOWNLOAD'}")
+print(f"football-data in repo: {dir_bytes(fd_local)/1e6:7.1f} MB  -> {'COPY' if fd_have else 'DOWNLOAD'}")
+
+# COMMAND ----------
+
+if sb_have:
+    dbutils.fs.cp(f"file:{sb_local}", f"{RAW_URI}/statsbomb", recurse=True)  # noqa: F821
+    print("copied StatsBomb from the repo")
+else:
+    r = subprocess.run([sys.executable, f"{REPO}/scripts/ingest_statsbomb.py",
+                        "--out", f"{RAW}/statsbomb"],
+                       capture_output=True, text=True, cwd=REPO)
+    print(r.stdout[-3000:]); print(r.stderr[-2000:] if r.returncode else "")
+    assert r.returncode == 0, "StatsBomb ingest failed"
+
+# COMMAND ----------
+
+if fd_have:
+    dbutils.fs.cp(f"file:{fd_local}", f"{RAW_URI}/football-data/full_load", recurse=True)  # noqa: F821
+    print("copied football-data full load from the repo")
+else:
+    # Same bytes as the committed files (checksum-verified), fetched over
+    # raw.githubusercontent so no API key and no rate limit are involved.
+    r = subprocess.run([sys.executable, f"{REPO}/scripts/fetch_committed_raw.py",
+                        "--out", f"{RAW}/football-data/full_load"],
+                       capture_output=True, text=True, cwd=REPO)
+    print(r.stdout[-2000:]); print(r.stderr[-1000:] if r.returncode else "")
+    assert r.returncode == 0, "football-data fetch failed"
+
+# COMMAND ----------
+
+# confirm what actually landed in DBFS before building anything on it
+for sub, expect in [("statsbomb/events", 66), ("football-data/full_load", 76)]:
+    n = len(dbutils.fs.ls(f"{RAW_URI}/{sub}"))  # noqa: F821
+    print(f"{sub:28} {n:>4} files   {'OK' if n >= expect else f'EXPECTED >= {expect}  <-- PROBLEM'}")
 
 # COMMAND ----------
 
@@ -103,8 +133,7 @@ from pipelines.silver import bronze_to_silver
 from pipelines.common.audit import new_batch_id
 from pipelines.common import config
 
-SNAPSHOT_DATE = "2026-09-27"
-RAW_URI = f"{LAKE}/raw"
+SNAPSHOT_DATE = "2026-09-27"   # the date the committed full load was pulled
 
 BRONZE_JOBS = [
     ("fd_matches",   f"{RAW_URI}/football-data/full_load/matches_*.json",   "FULL", None),
