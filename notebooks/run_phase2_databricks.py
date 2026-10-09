@@ -50,16 +50,36 @@ assert r.returncode == 0, "StatsBomb ingest failed"
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### football-data.org side
+# MAGIC ### football-data.org full load
 # MAGIC
-# MAGIC Store the API key as a Databricks secret first, don't paste it into the
-# MAGIC notebook:
+# MAGIC Fetched from GitHub rather than copied out of the Repo, because Repos
+# MAGIC does not bring the large committed files down with the clone - that is
+# MAGIC why `data/` looks empty in the workspace. These are the same bytes that
+# MAGIC are committed (verified by checksum), so the run is reproducible and no
+# MAGIC API key is needed here.
+
+# COMMAND ----------
+
+r = subprocess.run([sys.executable, f"{REPO}/scripts/fetch_committed_raw.py",
+                    "--out", f"{RAW}/football-data/full_load"],
+                   capture_output=True, text=True, cwd=REPO)
+print(r.stdout[-2000:])
+print(r.stderr[-1000:] if r.returncode else "")
+assert r.returncode == 0, "football-data fetch failed"
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Optional: a live daily snapshot
+# MAGIC
+# MAGIC Only needed to demonstrate the incremental load against the live API.
+# MAGIC Store the key as a secret first - do not paste it into the notebook:
 # MAGIC ```
 # MAGIC databricks secrets create-scope football
 # MAGIC databricks secrets put-secret football api_token
 # MAGIC ```
-# MAGIC If you have not set up secrets yet, skip this cell and copy the committed
-# MAGIC `data/full_load/` files into `{RAW}/football-data/full_load/` instead.
+# MAGIC Takes ~5 minutes (rate limited to 10 req/min). Skip it if you only need
+# MAGIC the full load.
 
 # COMMAND ----------
 
@@ -67,13 +87,10 @@ try:
     os.environ["FOOTBALL_DATA_TOKEN"] = dbutils.secrets.get("football", "api_token")  # noqa: F821
     r = subprocess.run([sys.executable, f"{REPO}/scripts/daily_snapshot.py",
                         "--out", f"{RAW}/football-data/daily"],
-                       capture_output=True, text=True, cwd=REPO)
+                       capture_output=True, text=True, cwd=REPO, timeout=1800)
     print(r.stdout[-3000:])
-except Exception as e:
-    print(f"skipped daily snapshot: {e}")
-    print("falling back to the committed full_load files")
-    dbutils.fs.cp(f"file://{REPO}/data/full_load",  # noqa: F821
-                  f"{LAKE}/raw/football-data/full_load", recurse=True)
+except Exception as e:  # noqa: BLE001
+    print(f"skipped daily snapshot ({e}) - the full load above is enough to run the pipeline")
 
 # COMMAND ----------
 
