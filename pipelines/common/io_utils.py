@@ -34,13 +34,56 @@ def add_metadata(df: DataFrame, batch_id: str, load_type: str, source_file_col: 
     return out
 
 
+class TableProbeError(RuntimeError):
+    """Raised when we cannot tell whether a table exists."""
+
+
 def table_exists(spark: SparkSession, path: str, fmt: str | None = None) -> bool:
+    """Does the target table already exist?
+
+    This must NOT guess. upsert() calls it to decide between MERGE and a
+    first-time overwrite write, so a wrong "no" overwrites a populated table
+    and destroys data. An earlier version caught every exception and returned
+    False, which meant a permissions error, an expired credential or a
+    transient storage blip all looked exactly like "table not created yet" and
+    would have silently wiped the table on the next run.
+
+    Now: a genuine "path not found" returns False. Anything else is re-raised
+    as TableProbeError so the run fails loudly and the audit log records it.
+    """
     fmt = fmt or config.TABLE_FORMAT
+
+    if fmt == "delta":
+        from delta.tables import DeltaTable
+        if DeltaTable.isDeltaTable(spark, path):
+            return True
+        # Not a Delta table: either nothing is there, or something non-Delta is.
+        try:
+            jvm = spark.sparkContext._jvm
+            jsc = spark.sparkContext._jsc.hadoopConfiguration()
+            p = jvm.org.apache.hadoop.fs.Path(path)
+            fs = p.getFileSystem(jsc)
+            if fs.exists(p):
+                raise TableProbeError(
+                    f"{path} exists but is not a Delta table. Refusing to overwrite it."
+                )
+            return False
+        except TableProbeError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            raise TableProbeError(f"could not probe {path}: {e}") from e
+
     try:
         spark.read.format(fmt).load(path).limit(1).collect()
         return True
-    except Exception:  # noqa: BLE001 - any read failure means "not there yet"
-        return False
+    except Exception as e:  # noqa: BLE001
+        msg = str(e).lower()
+        not_found = ("path does not exist" in msg or "path_not_found" in msg
+                     or "no such file" in msg or "is not a parquet file" in msg
+                     or "unable to infer schema" in msg)
+        if not_found:
+            return False
+        raise TableProbeError(f"could not probe {path}: {e}") from e
 
 
 def upsert(
@@ -98,11 +141,20 @@ def upsert(
         from delta.tables import DeltaTable
         tgt = DeltaTable.forPath(spark, path)
         on = " AND ".join([f"t.{k} = s.{k}" for k in keys])
-        (tgt.alias("t")
-            .merge(df.alias("s"), on)
-            .whenMatchedUpdateAll()
-            .whenNotMatchedInsertAll()
-            .execute())
+        builder = (tgt.alias("t")
+                   .merge(df.alias("s"), on)
+                   .whenMatchedUpdateAll()
+                   .whenNotMatchedInsertAll())
+        # updateAll/insertAll fail outright if the source carries a column the
+        # target does not have, which is precisely what happens when the source
+        # system adds a field. Schema evolution lets the table grow instead of
+        # the batch dying. withSchemaEvolution() is Delta 3.x+; on older
+        # versions the session conf below is the equivalent.
+        if hasattr(builder, "withSchemaEvolution"):
+            builder = builder.withSchemaEvolution()
+        else:
+            spark.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "true")
+        builder.execute()
     else:
         keep = existing.join(df.select(*keys).distinct(), keys, "left_anti")
         combined = keep.unionByName(df, allowMissingColumns=True)

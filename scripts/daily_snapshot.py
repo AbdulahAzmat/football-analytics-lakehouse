@@ -47,6 +47,17 @@ COMPETITIONS = ["PL", "ELC", "PD", "BL1", "SA", "FL1",
 SLEEP_SECONDS = 7.0
 
 
+def normalise_out(path: str) -> str:
+    """Databricks exposes DBFS as `dbfs:/x` (Spark URI) and `/dbfs/x` (FUSE mount).
+    Python's open()/os.makedirs only understand the latter; given the former they
+    silently create a local directory named "dbfs:". Normalise it."""
+    if path.startswith("dbfs:/"):
+        fixed = "/dbfs/" + path[len("dbfs:/"):].lstrip("/")
+        print(f"note: rewriting {path} -> {fixed} (python file IO needs the FUSE mount)")
+        return fixed
+    return path
+
+
 def fetch(url: str, token: str, retries: int = 3):
     req = urllib.request.Request(url, headers={"X-Auth-Token": token})
     for attempt in range(retries):
@@ -79,7 +90,7 @@ def main(argv=None) -> int:
         return 2
 
     snap = args.date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    outdir = os.path.join(args.out, snap)
+    outdir = os.path.join(normalise_out(args.out), snap)
     os.makedirs(outdir, exist_ok=True)
 
     date_to = date.fromisoformat(snap)

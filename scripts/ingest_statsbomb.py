@@ -34,6 +34,21 @@ BASE = "https://raw.githubusercontent.com/statsbomb/open-data/master/data"
 DEFAULT_COMPETITIONS = ["9/281", "7/235"]
 
 
+def normalise_out(path: str) -> str:
+    """Make a path usable by plain Python file IO on Databricks.
+
+    Databricks exposes DBFS two ways: `dbfs:/x` is the Spark URI, `/dbfs/x` is
+    the FUSE mount that open() and os.makedirs() understand. Handing `dbfs:/x`
+    to os.makedirs creates a literal directory called "dbfs:" in the driver's
+    local filesystem and the data quietly lands nowhere useful. Normalise it.
+    """
+    if path.startswith("dbfs:/"):
+        fixed = "/dbfs/" + path[len("dbfs:/"):].lstrip("/")
+        print(f"note: rewriting {path} -> {fixed} (python file IO needs the FUSE mount)")
+        return fixed
+    return path
+
+
 def fetch(url: str, retries: int = 3) -> bytes:
     last = None
     for attempt in range(retries):
@@ -61,6 +76,7 @@ def main() -> int:
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--skip-existing", action="store_true", default=True)
     args = ap.parse_args()
+    args.out = normalise_out(args.out)
 
     total_bytes = 0
     manifest = {"competitions": [], "files": 0, "bytes": 0}

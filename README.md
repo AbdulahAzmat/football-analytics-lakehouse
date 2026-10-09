@@ -136,9 +136,21 @@ The real source data is clean, so the main run quarantines nothing and the error
 
 **This test found a real bug.** The cast originally used `Column.cast()`, which under Spark 4 / current Databricks runtimes (ANSI mode on by default) **raises** on a malformed value rather than returning null — so a single bad timestamp aborted the entire Silver build, the exact opposite of the requirement. Fixed by switching to `try_cast` / `try_to_timestamp`. See the comment in `_cast_checked`.
 
+### Config consistency — `tests/test_config_consistency.py`
+
+Guards that every table the pipeline can build has merge keys registered. Added after `silver_sb_matches` was found missing from `MERGE_KEYS`: it still ran (each Silver builder returns its own keys) but the generated data dictionary showed that table with no primary key, which the spec requires. The test fails loudly rather than letting the docs quietly go wrong.
+
 ### Known gap
 
-**The Delta `MERGE INTO` code path has not been executed.** Delta's JARs come from Maven Central, which this sandbox cannot reach, so the harness ran the Parquet branch of `io_utils.upsert()` instead. That branch has the same idempotency semantics (anti-join on merge keys, then rewrite) and the property is proven, but the literal `DeltaTable.merge(...)` call has only been written, not run. It needs one execution on Databricks to confirm.
+**The Delta `MERGE INTO` code path has not been executed.** Delta's JARs come from Maven Central, which the build sandbox cannot reach, so the harness ran the Parquet branch of `io_utils.upsert()` instead. That branch has the same idempotency semantics (anti-join on merge keys, then rewrite) and the property is proven, but the literal `DeltaTable.merge(...)` call has only been written, not run.
+
+Run `notebooks/run_phase2_databricks.py` on Databricks to close this. Three fixes in that code path are also unexercised and should be watched on the first run:
+
+| fix | why it matters |
+|---|---|
+| `table_exists()` no longer swallows every exception | it previously treated a permissions error or storage blip as "table absent", which would have triggered an overwrite and destroyed a populated table |
+| Delta merge uses `withSchemaEvolution()` | `updateAll`/`insertAll` fail outright when the source gains a column, which is exactly the drift case the spec asks us to survive |
+| `dbfs:/` paths normalised to `/dbfs/` in the ingest scripts | Python file IO needs the FUSE mount; given the Spark URI it silently creates a local directory named `dbfs:` and the data lands nowhere useful |
 
 ---
 
