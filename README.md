@@ -27,8 +27,18 @@ Phase 1 review flagged that a 15.87 MB full load and a 15–30 KB daily load wer
 | | Phase 1 | Phase 2 | Target |
 |---|---|---|---|
 | Full load | 15.87 MB | **248.7 MB** | ~200 MB |
-| Daily load | 15–30 KB | **~1.85 MB** | ≥ 1 MB |
+| Daily load | 15–30 KB | **~1.6 MB** | ≥ 1 MB |
 | Largest table | 14,001 rows | **267,255 rows** | — |
+
+The daily figure is partly measured and partly derived, so to be precise about
+which is which: the standings, scorers and teams snapshot for all 12
+competitions is **1.45 MB**, measured directly from those files in
+`data/full_load/` (34 files, which are exactly one day's capture). On top of
+that `daily_snapshot.py` makes one date-windowed matches call, 3 days by
+default; at the measured 1.01 KB per match record that adds roughly 0.1-0.2 MB
+depending on the fixture list. So ~1.6 MB a day, against a 1 MB target. The
+script has not yet been run against the live API, so the match-window part is
+an estimate from measured record sizes rather than an observed figure.
 
 The daily load grew because it no longer pulls only date-scoped match updates. It now captures a full daily **snapshot** of standings, scorers and squads for all 12 competitions, which is what makes change-over-time analysis possible: diffing consecutive snapshots yields each team's league position by day and each player's goals by day, neither of which the API exposes as a time series.
 
