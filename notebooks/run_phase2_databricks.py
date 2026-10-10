@@ -6,8 +6,9 @@
 # MAGIC ingest raw data into DBFS, build Bronze and Silver with **Delta**, then
 # MAGIC run everything a second time to prove idempotency.
 # MAGIC
-# MAGIC Attach to serverless compute. Expect roughly 15–25 minutes, mostly the
-# MAGIC StatsBomb download.
+# MAGIC Attach to serverless compute. Roughly 10-20 minutes: the slow part is
+# MAGIC Bronze over the 267k StatsBomb events, not the ingest, since the raw data
+# MAGIC is copied from the Repo when it is already there rather than downloaded.
 
 # COMMAND ----------
 
