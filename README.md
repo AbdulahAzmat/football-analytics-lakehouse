@@ -111,6 +111,18 @@ workspace rather than describing it:
 | 6.4 | a deliberately corrupt file loaded live: null key and failed cast quarantined, undeclared column dropped, wrong type nulled, batch still `SUCCESS` |
 | 6.5 | the final log, grouped by load type |
 
+That run is saved in [`proof/`](proof/) so it can be read without a Databricks
+account:
+
+* **[`proof/phase2_run_with_outputs.ipynb`](proof/phase2_run_with_outputs.ipynb)**
+  - the executed notebook. GitHub renders it in the browser, including the
+  execution log table (all 64 rows, both load types) and the quarantine output.
+* **[`proof/phase2_run_output.html`](proof/phase2_run_output.html)** - the same
+  run as a standalone page. Download and open in a browser.
+
+Both are from the run of 2026-10-10 against Delta tables in a Unity Catalog
+volume on Databricks Free Edition, serverless compute.
+
 ---
 
 ## 4. Test results
