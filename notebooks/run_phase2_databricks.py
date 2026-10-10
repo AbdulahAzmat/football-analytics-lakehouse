@@ -21,7 +21,21 @@ import os, sys, subprocess
 REPO = "/Workspace/Repos/abdullahazmat.w@gmail.com/football-analytics-lakehouse"
 
 assert os.path.exists(REPO), f"repo not found at {REPO} - fix REPO above"
-sys.path.insert(0, REPO)
+if REPO not in sys.path:
+    sys.path.insert(0, REPO)
+
+# Drop any previously-imported pipeline modules.
+#
+# Databricks keeps the Python interpreter alive between runs, so once
+# `pipelines.*` has been imported it stays in sys.modules. Pulling new code
+# from git changes the files on disk but NOT the modules already in memory, so
+# a re-run silently executes the old code and you debug a bug you already
+# fixed. Purging them here forces a genuine re-read from disk.
+_stale = [m for m in sys.modules if m == "pipelines" or m.startswith("pipelines.")]
+for m in _stale:
+    del sys.modules[m]
+if _stale:
+    print(f"purged {len(_stale)} cached pipeline modules so the pulled code is used")
 
 # Where the lakehouse lives.
 #
