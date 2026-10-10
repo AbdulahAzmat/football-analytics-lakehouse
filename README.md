@@ -140,17 +140,44 @@ The real source data is clean, so the main run quarantines nothing and the error
 
 Guards that every table the pipeline can build has merge keys registered. Added after `silver_sb_matches` was found missing from `MERGE_KEYS`: it still ran (each Silver builder returns its own keys) but the generated data dictionary showed that table with no primary key, which the spec requires. The test fails loudly rather than letting the docs quietly go wrong.
 
-### Known gap
+### Databricks run — Delta `MERGE INTO` verified
 
-**The Delta `MERGE INTO` code path has not been executed.** Delta's JARs come from Maven Central, which the build sandbox cannot reach, so the harness ran the Parquet branch of `io_utils.upsert()` instead. That branch has the same idempotency semantics (anti-join on merge keys, then rewrite) and the property is proven, but the literal `DeltaTable.merge(...)` call has only been written, not run.
+The pipeline was run end to end on **Databricks Free Edition, serverless compute, Unity Catalog, `TABLE_FORMAT=delta`**, against the full dataset. Two passes over identical input with fresh batch ids:
 
-Run `notebooks/run_phase2_databricks.py` on Databricks to close this. Three fixes in that code path are also unexercised and should be watched on the first run:
+| table | rows | pass 2 | idempotent |
+|---|---|---|---|
+| `bronze_fd_matches` | 14,001 | `inserted=0 updated=14001` | yes |
+| `bronze_fd_standings` | 212 | `inserted=0 updated=212` | yes |
+| `bronze_fd_scorers` | 600 | `inserted=0 updated=600` | yes |
+| `bronze_fd_teams` | 284 | `inserted=0 updated=284` | yes |
+| `bronze_sb_matches` | 66 | `inserted=0 updated=66` | yes |
+| `bronze_sb_lineups` | 2,620 | `inserted=0 updated=2620` | yes |
+| `bronze_sb_events` | **267,255** | `inserted=0 updated=267255` | yes |
+| `silver_matches` | 14,001 | `inserted=0 updated=14001` | yes |
+| `silver_standings` | 212 | `inserted=0 updated=212` | yes |
+| `silver_scorers` | 600 | `inserted=0 updated=600` | yes |
+| `silver_teams` | 284 | `inserted=0 updated=284` | yes |
+| `silver_sb_matches` | 66 | `inserted=0 updated=66` | yes |
+| `silver_lineups` | 2,620 | `inserted=0 updated=2620` | yes |
+| `silver_events` | **267,255** | `inserted=0 updated=267255` | yes |
 
-| fix | why it matters |
-|---|---|
-| `table_exists()` no longer swallows every exception | it previously treated a permissions error or storage blip as "table absent", which would have triggered an overwrite and destroyed a populated table |
-| Delta merge uses `withSchemaEvolution()` | `updateAll`/`insertAll` fail outright when the source gains a column, which is exactly the drift case the spec asks us to survive |
-| `dbfs:/` paths normalised to `/dbfs/` in the ingest scripts | Python file IO needs the FUSE mount; given the Spark URI it silently creates a local directory named `dbfs:` and the data lands nowhere useful |
+`IDEMPOTENCY (Delta MERGE): PASS`
+
+`inserted=0, updated=N` on the second pass is the point: the merge matched every existing key and updated in place rather than appending. Row counts are unchanged across both passes.
+
+### What the Databricks run caught that local testing could not
+
+The offline harness runs Parquet on open-source Spark. That is structurally blind to Unity Catalog and serverless restrictions, and three real defects only surfaced on the first real run:
+
+| failure | cause | fix |
+|---|---|---|
+| `DBFS_DISABLED` | newer workspaces disable the public DBFS root, so `dbfs:/FileStore` was never writable | root the lakehouse at a Unity Catalog volume, discovered at runtime |
+| `UC_COMMAND_NOT_SUPPORTED: input_file_name` | UC bans `input_file_name()`. It backed the `source_file` column **and** recovered `match_id` for StatsBomb events, which carry it only in the filename — all 267k event rows would have failed their required-field check and been quarantined | capture `_metadata.file_path` at the file scan and carry it through the flatteners |
+| `JVM_ATTRIBUTE_NOT_SUPPORTED: sparkContext` | the "don't overwrite a non-Delta path" guard reached into `spark.sparkContext._jvm`; serverless blocks driver JVM access | re-express the probe in pure DataFrame API, classifying the read failure |
+
+The second is the one worth noting: it would not have thrown a visible error in a less strict setup, it would have silently emptied the largest table.
+
+Everything else — explicit schemas, casting, metadata, parameterisation, drift quarantine, audit logging — behaved on Databricks exactly as it did locally.
 
 ---
 
