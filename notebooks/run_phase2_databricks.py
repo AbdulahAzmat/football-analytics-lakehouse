@@ -3,8 +3,8 @@
 # MAGIC # Phase 2 — run the pipeline on Databricks
 # MAGIC
 # MAGIC Import this into Databricks and run top to bottom. It does steps 3–5:
-# MAGIC ingest raw data into DBFS, build Bronze and Silver with **Delta**, then
-# MAGIC run everything a second time to prove idempotency.
+# MAGIC land the raw data in the lakehouse, build Bronze and Silver with **Delta**,
+# MAGIC then run everything a second time to prove idempotency.
 # MAGIC
 # MAGIC Attach to serverless compute. Roughly 10-20 minutes: the slow part is
 # MAGIC Bronze over the 267k StatsBomb events, not the ingest, since the raw data
@@ -19,20 +19,65 @@
 import os, sys, subprocess
 
 REPO = "/Workspace/Repos/abdullahazmat.w@gmail.com/football-analytics-lakehouse"
-LAKE = "dbfs:/FileStore/football_lakehouse"
+
+assert os.path.exists(REPO), f"repo not found at {REPO} - fix REPO above"
+sys.path.insert(0, REPO)
+
+# Where the lakehouse lives.
+#
+# Newer workspaces (Free Edition included) have the public DBFS root switched
+# off - writing to dbfs:/FileStore fails with DBFS_DISABLED. The supported
+# replacement is a Unity Catalog Volume, which has the convenient property that
+# Spark and plain python file IO use the SAME path, so there is no dbfs: vs
+# /dbfs/ split to get wrong.
+#
+# This finds a catalog and schema you can actually write to, creates the volume
+# if needed, and falls back to DBFS only on older workspaces where that works.
+
+VOLUME_NAME = "football_lakehouse"
+
+
+def _first_writable_catalog_schema():
+    prefer_catalogs = ["workspace", "main"]
+    catalogs = [r[0] for r in spark.sql("SHOW CATALOGS").collect()]  # noqa: F821
+    ordered = [c for c in prefer_catalogs if c in catalogs] + \
+              [c for c in catalogs if c not in prefer_catalogs and
+               c not in ("samples", "system", "hive_metastore")]
+    for cat in ordered:
+        try:
+            schemas = [r[0] for r in spark.sql(f"SHOW SCHEMAS IN `{cat}`").collect()]  # noqa: F821
+        except Exception:
+            continue
+        for sch in (["default"] + [s for s in schemas if s != "default"]):
+            if sch in schemas and sch != "information_schema":
+                return cat, sch
+    return None, None
+
+
+LAKE = None
+try:
+    cat, sch = _first_writable_catalog_schema()
+    if cat:
+        spark.sql(f"CREATE VOLUME IF NOT EXISTS `{cat}`.`{sch}`.`{VOLUME_NAME}`")  # noqa: F821
+        LAKE = f"/Volumes/{cat}/{sch}/{VOLUME_NAME}"
+        print(f"using Unity Catalog volume: {LAKE}")
+except Exception as e:  # noqa: BLE001
+    print(f"could not create a UC volume ({e}); trying DBFS")
+
+if LAKE is None:
+    LAKE = "dbfs:/FileStore/football_lakehouse"
+    print(f"falling back to DBFS: {LAKE}")
 
 os.environ["LAKE_ROOT"] = LAKE
 os.environ["TABLE_FORMAT"] = "delta"          # the path that has never been run
-sys.path.insert(0, REPO)
 
-assert os.path.exists(REPO), f"repo not found at {REPO} - fix REPO above"
 print("repo :", REPO)
 print("lake :", LAKE)
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## 1. Get raw data into DBFS
+# MAGIC ## 1. Land the raw data in the lakehouse
 # MAGIC
 # MAGIC Whether the committed data survives the Repos clone varies by workspace
 # MAGIC and file size, so this detects rather than assumes:
@@ -40,13 +85,17 @@ print("lake :", LAKE)
 # MAGIC * **data present in the Repo** - copy it across (seconds, no network)
 # MAGIC * **data absent** - download it (~233 MB, several minutes)
 # MAGIC
-# MAGIC Either way the pipeline reads from DBFS, so everything downstream is
-# MAGIC identical.
+# MAGIC Either way the pipeline reads from the lakehouse root, so everything
+# MAGIC downstream is identical.
 
 # COMMAND ----------
 
-RAW = "/dbfs/FileStore/football_lakehouse/raw"     # FUSE path, for python file IO
-RAW_URI = f"{LAKE}/raw"                            # dbfs: URI, for Spark
+# On a UC Volume both Spark and python file IO use the same path. On DBFS they
+# differ (dbfs:/x for Spark, /dbfs/x for python), so derive both explicitly.
+RAW_URI = f"{LAKE}/raw"                                   # for Spark
+RAW = RAW_URI.replace("dbfs:/", "/dbfs/", 1) if RAW_URI.startswith("dbfs:/") else RAW_URI
+print("raw (spark) :", RAW_URI)
+print("raw (python):", RAW)
 
 
 def dir_bytes(p: str) -> int:
@@ -93,7 +142,7 @@ else:
 
 # COMMAND ----------
 
-# confirm what actually landed in DBFS before building anything on it
+# confirm what actually landed before building anything on top of it
 for sub, expect in [("statsbomb/events", 66), ("football-data/full_load", 76)]:
     n = len(dbutils.fs.ls(f"{RAW_URI}/{sub}"))  # noqa: F821
     print(f"{sub:28} {n:>4} files   {'OK' if n >= expect else f'EXPECTED >= {expect}  <-- PROBLEM'}")
