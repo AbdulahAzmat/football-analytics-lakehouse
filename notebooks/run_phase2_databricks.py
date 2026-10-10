@@ -196,6 +196,7 @@ from pipelines.bronze import raw_to_bronze
 from pipelines.silver import bronze_to_silver
 from pipelines.common.audit import new_batch_id
 from pipelines.common import config
+from pyspark.sql import functions as F
 
 SNAPSHOT_DATE = "2026-09-27"   # the date the committed full load was pulled
 
@@ -315,3 +316,351 @@ for t in ["bronze_fd_matches", "silver_matches", "silver_events"]:
         print(f"{t}: {q.count()} quarantined")
     except Exception:
         print(f"{t}: no quarantine table (nothing rejected)")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC # 6. Proof for the rubric
+# MAGIC
+# MAGIC Sections 2-5 prove the full load, Delta MERGE idempotency and the audit
+# MAGIC log. The rubric also wants to *see*, running in this workspace:
+# MAGIC
+# MAGIC | # | What the rubric asks for | Where |
+# MAGIC |---|---|---|
+# MAGIC | 6.1 | explicit schemas, not inferred | prints every `StructType` |
+# MAGIC | 6.2 | parameters and a backfill | reprocesses one competition by `--path` |
+# MAGIC | 6.3 | full **and incremental** loads | an INCREMENTAL snapshot load |
+# MAGIC | 6.4 | how a schema change is handled | corrupt file, live, into quarantine |
+# MAGIC | 6.5 | the log table, both load types | final audit summary |
+# MAGIC
+# MAGIC Everything below is additive and safe to re-run.
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 6.1 Explicit schemas
+# MAGIC
+# MAGIC Every raw feed is read with a declared `StructType`. Nothing calls
+# MAGIC `inferSchema`, so a source that changes type cannot silently change the
+# MAGIC table's type underneath us - the value fails the cast and is quarantined
+# MAGIC instead (6.4 shows that happening).
+
+# COMMAND ----------
+
+from pipelines.common.schemas import RAW_SCHEMAS, ARRAY_ROOTED
+from pyspark.sql import functions as F
+
+print("grep for inferSchema in the pipeline package:")
+_hits = subprocess.run(["grep", "-rn", "inferSchema", f"{REPO}/pipelines"],
+                       capture_output=True, text=True).stdout.strip()
+print("   none found - every read is schema-on-read" if not _hits else _hits)
+print()
+print(f"{len(RAW_SCHEMAS)} declared raw schemas:\n")
+for feed, sch in RAW_SCHEMAS.items():
+    root = "array-rooted file" if feed in ARRAY_ROOTED else "object-rooted file"
+    print(f"--- {feed}  ({root}, {len(sch.fields)} top-level fields) ---")
+    print(sch.simpleString()[:600] + ("..." if len(sch.simpleString()) > 600 else ""))
+    print()
+
+# COMMAND ----------
+
+# the full tree for one feed, and the Delta schema it produces.
+# An empty frame built from the declared StructType prints the schema we
+# *demand* of the source, independently of any data.
+print("DECLARED schema for the football-data matches feed:")
+spark.createDataFrame([], RAW_SCHEMAS["fd_matches"]).printSchema()  # noqa: F821
+
+print("RESULTING Delta table schema (bronze_fd_matches):")
+spark.read.format("delta").load(config.table_path("bronze", "bronze_fd_matches")).printSchema()  # noqa: F821
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 6.2 Parameters and a backfill
+# MAGIC
+# MAGIC Both loaders are command-line programs: `--feed/--table`, `--path`,
+# MAGIC `--load-type`, `--batch-id`, `--snapshot-date`. A backfill is therefore
+# MAGIC just the same loader pointed at a narrower path, which is what makes
+# MAGIC "re-run one competition for one season" possible without touching the
+# MAGIC rest of the table.
+# MAGIC
+# MAGIC Below: reprocess **Premier League 2023 only**, with a batch id we choose.
+# MAGIC The table total must not move (MERGE updates the 380 matching rows in
+# MAGIC place) and the audit row must carry our batch id and our path.
+
+# COMMAND ----------
+
+BACKFILL_PATH = f"{RAW_URI}/football-data/full_load/matches_PL_2023.json"
+BACKFILL_BATCH = "backfill_PL_2023_demo"
+
+bronze_matches = config.table_path("bronze", "bronze_fd_matches")
+before = spark.read.format("delta").load(bronze_matches).count()  # noqa: F821
+print(f"bronze_fd_matches before backfill: {before:,} rows")
+
+argv = ["--feed", "fd_matches", "--path", BACKFILL_PATH,
+        "--load-type", "FULL", "--batch-id", BACKFILL_BATCH]
+print("\n$ python -m pipelines.bronze.raw_to_bronze " + " ".join(argv) + "\n")
+try:
+    raw_to_bronze.main(argv)
+except Exception as e:  # noqa: BLE001
+    # Serverless refuses some SparkSession.builder options on an existing
+    # session. The argument handling is the thing being demonstrated, so fall
+    # back to the function the CLI calls, with the same parsed values.
+    print(f"(CLI entry point unavailable here: {e})")
+    print("running the same call through run_feed with identical parameters")
+    raw_to_bronze.run_feed(spark, "fd_matches", BACKFILL_PATH, "FULL", BACKFILL_BATCH, None)  # noqa: F821
+
+after = spark.read.format("delta").load(bronze_matches).count()  # noqa: F821
+print(f"\nbronze_fd_matches after backfill : {after:,} rows")
+print("BACKFILL IS NON-DESTRUCTIVE:", "PASS" if after == before else f"FAIL (moved by {after-before})")
+
+# COMMAND ----------
+
+# the audit row for that backfill: our batch id, our path, updates not inserts
+(spark.read.format("delta").load(config.EXECUTION_LOG_PATH)  # noqa: F821
+      .filter(f"batch_id = '{BACKFILL_BATCH}'")
+      .select("batch_id", "layer", "table_name", "parameter", "load_type",
+              "rows_read", "rows_inserted", "rows_updated", "status")
+      .display())
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 6.3 An incremental load
+# MAGIC
+# MAGIC The standings and scorers feeds are **daily snapshots**: the same
+# MAGIC competitions re-captured each day, keyed by `snapshot_date`, so history
+# MAGIC accumulates instead of being overwritten. That is the incremental path,
+# MAGIC and it is driven entirely by `--snapshot-date` + `--load-type
+# MAGIC INCREMENTAL`.
+# MAGIC
+# MAGIC `scripts/daily_snapshot.py` fetches a new day from the API and then calls
+# MAGIC exactly the two commands below. The API key is not in this notebook, so
+# MAGIC this re-plays the existing payload under a later snapshot date - the load
+# MAGIC path, the parameters, the merge keys and the audit rows are the real
+# MAGIC ones; only the arrival of the file is simulated.
+# MAGIC
+# MAGIC Silver reads **only the new date's partition**, not the whole table.
+
+# COMMAND ----------
+
+INC_DATE = "2026-09-28"          # the "next day" snapshot
+inc_batch = new_batch_id("incremental_demo")
+
+std_bronze = config.table_path("bronze", "bronze_fd_standings")
+std_silver = config.table_path("silver", "silver_standings")
+b_before = spark.read.format("delta").load(std_bronze).count()   # noqa: F821
+s_before = spark.read.format("delta").load(std_silver).count()   # noqa: F821
+print(f"before:  bronze_fd_standings={b_before:,}   silver_standings={s_before:,}")
+
+print(f"\n$ ... --feed fd_standings --load-type INCREMENTAL --snapshot-date {INC_DATE}")
+raw_to_bronze.run_feed(spark, "fd_standings",  # noqa: F821
+                       f"{RAW_URI}/football-data/full_load/standings_*.json",
+                       "INCREMENTAL", inc_batch, INC_DATE)
+
+print(f"\n$ ... --table silver_standings --load-type INCREMENTAL --snapshot-date {INC_DATE}")
+bronze_to_silver.run_table(spark, "silver_standings", inc_batch, "INCREMENTAL", INC_DATE)  # noqa: F821
+
+b_after = spark.read.format("delta").load(std_bronze).count()    # noqa: F821
+s_after = spark.read.format("delta").load(std_silver).count()    # noqa: F821
+print(f"\nafter :  bronze_fd_standings={b_after:,}   silver_standings={s_after:,}")
+print(f"new rows: bronze +{b_after-b_before:,}   silver +{s_after-s_before:,}")
+
+# On the first run this is a pure append of a new date. On a re-run the date is
+# already there and MERGE updates it in place, so the test is "the new snapshot
+# is present and the earlier days are still intact", not "the count grew".
+dates = [str(r[0]) for r in spark.read.format("delta").load(std_silver)  # noqa: F821
+         .select("snapshot_date").distinct().orderBy("snapshot_date").collect()]
+print("snapshot dates held:", ", ".join(dates))
+print("INCREMENTAL SNAPSHOT PRESENT:", "PASS" if INC_DATE in dates else "FAIL")
+print("EARLIER SNAPSHOT RETAINED  :", "PASS" if SNAPSHOT_DATE in dates else "FAIL")
+
+# COMMAND ----------
+
+# the table now holds more than one day, which is the point of the snapshot design
+(spark.read.format("delta").load(std_silver)  # noqa: F821
+      .groupBy("snapshot_date").count().orderBy("snapshot_date").display())
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 6.4 Schema drift, live
+# MAGIC
+# MAGIC The real source data is clean, so the quarantine path never fires during
+# MAGIC a normal run. This writes a deliberately broken file and loads it, to
+# MAGIC show the four failure modes being handled rather than crashing the batch:
+# MAGIC
+# MAGIC | case | corruption | how it should be handled |
+# MAGIC |---|---|---|
+# MAGIC | 1 | primary key is null | **quarantined** at Bronze - a row with no key cannot be merged |
+# MAGIC | 2 | `utcDate` is no longer a timestamp | **quarantined** at Silver - the cast fails, the row is parked |
+# MAGIC | 3 | upstream added a field we never declared | **dropped** - schema-on-read ignores it, the row loads |
+# MAGIC | 4 | an int field arrives as a string | **nulled** - the declared type wins, the row loads |
+# MAGIC
+# MAGIC The common requirement across all four: `status=SUCCESS`, the two clean
+# MAGIC records load, nothing silently disappears, and the table's declared types
+# MAGIC never change because of what arrived. Cases 3 and 4 deliberately do *not*
+# MAGIC quarantine - the record is still usable, so rejecting it would lose good
+# MAGIC data.
+
+# COMMAND ----------
+
+import json
+
+DRIFT_DIR = f"{RAW}/drift_demo"
+DRIFT_URI = f"{RAW_URI}/drift_demo"
+os.makedirs(DRIFT_DIR, exist_ok=True)
+
+
+def _good(mid, utc="2026-09-20T14:00:00Z"):
+    return {
+        "id": mid, "utcDate": utc, "status": "FINISHED", "matchday": 5,
+        "stage": "REGULAR_SEASON", "group": None, "lastUpdated": "2026-09-27T00:20:33Z",
+        "competition": {"id": 2021, "name": "Premier League", "code": "PL", "type": "LEAGUE"},
+        "season": {"id": 2502, "startDate": "2026-08-21", "endDate": "2027-05-30",
+                   "currentMatchday": 6},
+        "homeTeam": {"id": 1, "name": "Drift Home FC", "tla": "DHM"},
+        "awayTeam": {"id": 2, "name": "Drift Away FC", "tla": "DAW"},
+        "score": {"winner": "HOME_TEAM", "duration": "REGULAR",
+                  "fullTime": {"home": 2, "away": 1}, "halfTime": {"home": 1, "away": 0}},
+    }
+
+
+rows = [_good(999_000_001), _good(999_000_002)]
+rows.append(_good(None))                                        # 1 null PK
+rows.append(_good(999_000_003, utc="not-a-timestamp-at-all"))    # 2 type drift
+_m = _good(999_000_004); _m["brandNewFieldFromUpstream"] = {"nested": "v", "n": 42}
+rows.append(_m)                                                  # 3 undeclared column
+_m = _good(999_000_005); _m["score"]["fullTime"]["home"] = "two"
+rows.append(_m)                                                  # 4 int -> string
+
+with open(f"{DRIFT_DIR}/matches_DRIFT_9999.json", "w") as f:
+    json.dump({"competition": {"id": 2021, "name": "Premier League",
+                               "code": "PL", "type": "LEAGUE"},
+               "resultSet": {"count": len(rows), "played": len(rows)},
+               "matches": rows}, f)
+print(f"wrote {len(rows)} records, 4 of them deliberately broken, to {DRIFT_DIR}")
+
+# COMMAND ----------
+
+drift_batch = new_batch_id("drift_demo")
+print("loading the corrupt file through the normal Bronze loader\n")
+raw_to_bronze.run_feed(spark, "fd_matches", f"{DRIFT_URI}/matches_DRIFT_9999.json",  # noqa: F821
+                       "FULL", drift_batch, None)
+print("\nthe batch completed - a broken record did not take the run down\n")
+
+print("then Silver over the same data (this is where the casts happen):")
+bronze_to_silver.run_table(spark, "silver_matches", drift_batch, "FULL", None)  # noqa: F821
+
+# COMMAND ----------
+
+for tbl in ("bronze_fd_matches", "silver_matches"):
+    try:
+        q = (spark.read.format("delta").load(config.table_path("quarantine", tbl))  # noqa: F821
+                  .filter(f"batch_id = '{drift_batch}'"))
+        n = q.count()
+        print(f"\n{tbl}: {n} record(s) quarantined")
+        if n:
+            q.groupBy("quarantine_reason").count().show(truncate=False)
+            q.select([c for c in q.columns if c in
+                      ("match_id", "utc_date", "quarantine_reason", "quarantined_at")]).show(truncate=False)
+    except Exception as e:  # noqa: BLE001
+        print(f"\n{tbl}: no quarantine table ({e})")
+
+# COMMAND ----------
+
+# per-record outcome, so the four cases can be read off directly
+demo_ids = [999000001, 999000002, 999000003, 999000004, 999000005]
+loaded = {r[0] for r in spark.read.format("delta").load(bronze_matches)  # noqa: F821
+          .filter(F.col("match_id").isin(demo_ids)).select("match_id").collect()}
+sm = spark.read.format("delta").load(config.table_path("silver", "silver_matches"))  # noqa: F821
+in_silver = {r[0] for r in sm.filter(F.col("match_id").isin(demo_ids)).select("match_id").collect()}
+
+print(f"{'record':>12}  {'case':34} {'bronze':>8} {'silver':>8}")
+cases = {999000001: "clean control", 999000002: "clean control",
+         999000003: "2 - utcDate not a timestamp", 999000004: "3 - undeclared column",
+         999000005: "4 - int arrived as string"}
+for mid in demo_ids:
+    print(f"{mid:>12}  {cases[mid]:34} {'yes' if mid in loaded else 'no':>8} "
+          f"{'yes' if mid in in_silver else 'QUARANTINED':>8}")
+print(f"\n{'(null)':>12}  {'1 - null primary key':34} {'QUARANTINED at Bronze':>8}")
+print("\nscore for record 999000005 (the string 'two' against a declared int):")
+spark.read.format("delta").load(bronze_matches).filter("match_id = 999000005") \
+     .select("match_id", "full_time_home", "full_time_away",
+             "half_time_home", "half_time_away").show()  # noqa: F821
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### The undeclared column
+# MAGIC
+# MAGIC Case 3 is the interesting one: the record is *valid*, it just carries a
+# MAGIC field we never declared. Because the read is schema-on-read, the unknown
+# MAGIC field is dropped rather than changing the table, and the row loads
+# MAGIC normally. The pipeline keeps working through an upstream addition without
+# MAGIC a migration and without a surprise column appearing in Silver.
+
+# COMMAND ----------
+
+print("record 999000004 carried brandNewFieldFromUpstream. Did it load, and did the column leak in?\n")
+bm = spark.read.format("delta").load(bronze_matches)  # noqa: F821
+print("loaded :", bm.filter("match_id = 999000004").count() == 1)
+print("leaked :", any("brandnew" in c.lower() for c in bm.columns))
+print("\ncolumns:", ", ".join(bm.columns))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Clean up the demo rows
+# MAGIC
+# MAGIC The drift records were synthetic, so remove them. This also exercises
+# MAGIC Delta `DELETE`, which a plain parquet directory could not do.
+
+# COMMAND ----------
+
+from delta.tables import DeltaTable
+
+for layer, tbl in (("bronze", "bronze_fd_matches"), ("silver", "silver_matches")):
+    p = config.table_path(layer, tbl)
+    DeltaTable.forPath(spark, p).delete("match_id >= 999000000")  # noqa: F821
+    df = spark.read.format("delta").load(p)  # noqa: F821
+    left = df.filter("match_id >= 999000000").count()
+    print(f"{tbl}: {left} demo rows remaining (expected 0), {df.count():,} real rows intact")
+
+# and remove the corrupt source file so a later full run does not re-ingest it
+import shutil
+shutil.rmtree(DRIFT_DIR, ignore_errors=True)
+print("removed", DRIFT_DIR)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## 6.5 Final audit log
+# MAGIC
+# MAGIC One row per table per run, with the parameter it was given, the load
+# MAGIC type, timings, row counts and status. Both FULL and INCREMENTAL now
+# MAGIC appear, and the quarantined counts are non-zero for the drift batch.
+
+# COMMAND ----------
+
+log = spark.read.format("delta").load(config.EXECUTION_LOG_PATH)  # noqa: F821
+print("total audit rows:", log.count())
+log.groupBy("load_type", "status").count().orderBy("load_type").display()
+
+# COMMAND ----------
+
+(log.select("start_time", "layer", "table_name", "parameter", "load_type", "batch_id",
+            "status", "rows_read", "rows_inserted", "rows_updated", "rows_quarantined",
+            "duration_seconds")
+    .orderBy(F.col("start_time").desc())  # noqa: F821
+    .display())
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Checklist
+# MAGIC
+# MAGIC Everything above ran in this workspace, against Delta tables in a Unity
+# MAGIC Catalog volume. Export this notebook with its outputs
+# MAGIC (**File -> Export -> HTML**) and commit the file, or screen-record
+# MAGIC sections 2-6.

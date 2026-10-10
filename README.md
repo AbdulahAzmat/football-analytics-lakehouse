@@ -94,6 +94,23 @@ data/
 | Dedicated logging table | `pipeline_execution_logs` | 28 rows, all SUCCESS |
 | Audit metrics | `RunLogger.record` | layer, parameter, times, status, row counts |
 
+### Where to see each feature running
+
+Grading is on what the pipeline does, not what this file claims, so section 6
+of `notebooks/run_phase2_databricks.py` demonstrates each item live in the
+workspace rather than describing it:
+
+| Notebook section | Shows |
+|---|---|
+| 2 | Bronze and Silver built from raw, into Delta |
+| 3 | the same run repeated - row counts unchanged, `inserted=0, updated=N` |
+| 4 | the audit log, one row per table per run |
+| 6.1 | every declared `StructType`, and a grep proving no `inferSchema` anywhere |
+| 6.2 | a backfill of one competition and season by `--path`, with a chosen `--batch-id`, leaving the table total unmoved |
+| 6.3 | an `INCREMENTAL` snapshot load, so the log holds both load types and the table holds more than one day |
+| 6.4 | a deliberately corrupt file loaded live: null key and failed cast quarantined, undeclared column dropped, wrong type nulled, batch still `SUCCESS` |
+| 6.5 | the final log, grouped by load type |
+
 ---
 
 ## 4. Test results
