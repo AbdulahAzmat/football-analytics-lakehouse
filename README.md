@@ -91,7 +91,7 @@ data/
 | Idempotency via `MERGE INTO` | `io_utils.upsert` | run twice, counts identical |
 | Parameterised backfills | `--path`, `--snapshot-date`, `--batch-id` | see §5 |
 | Schema drift handling | `quarantine`, `split_valid_invalid`, `_drift_split` | 4 failure modes tested |
-| Dedicated logging table | `pipeline_execution_logs` | 28 rows, all SUCCESS |
+| Dedicated logging table | `pipeline_execution_logs` | cumulative, see note below |
 | Audit metrics | `RunLogger.record` | layer, parameter, times, status, row counts |
 
 ### Where to see each feature running
@@ -195,6 +195,23 @@ The offline harness runs Parquet on open-source Spark. That is structurally blin
 The second is the one worth noting: it would not have thrown a visible error in a less strict setup, it would have silently emptied the largest table.
 
 Everything else — explicit schemas, casting, metadata, parameterisation, drift quarantine, audit logging — behaved on Databricks exactly as it did locally.
+
+### A note on the `FAILED` rows in the execution log
+
+`pipeline_execution_logs` is cumulative: it lives in the lakehouse volume and is
+appended to by every run, so it spans development as well as the final run. It
+therefore contains rows with `status=FAILED`, each carrying the exception that
+caused it. Those are the three defects in the table above, recorded as they
+happened.
+
+They are left in deliberately. `RunLogger` writes its row on exit whether the
+body succeeded or raised, and a log that has only ever recorded SUCCESS does not
+demonstrate that it captures anything else. The failures are dated, attributed to
+a table and a parameter, and carry their error text, which is what the logging
+requirement is actually for.
+
+The final run itself is clean: the audit log grew by exactly the number of runs
+executed, with no new failures.
 
 ---
 
