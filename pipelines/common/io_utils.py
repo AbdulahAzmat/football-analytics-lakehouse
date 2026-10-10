@@ -23,14 +23,20 @@ def add_metadata(df: DataFrame, batch_id: str, load_type: str, source_file_col: 
     load_timestamp is the moment THIS record was processed, which is what the
     requirement asks for - not the source's own lastUpdated, which is a
     different thing and is kept separately as a business column.
+
+    source_file is expected to already be on the frame: Bronze materialises it
+    in read_raw from _metadata.file_path, and Silver inherits it from Bronze.
+    It deliberately does NOT fall back to input_file_name(), which Unity
+    Catalog rejects with UC_COMMAND_NOT_SUPPORTED. If the column is genuinely
+    absent we write an explicit marker rather than silently inventing a path.
     """
     out = (
         df.withColumn("load_timestamp", F.lit(datetime.now(timezone.utc)).cast("timestamp"))
           .withColumn("batch_id", F.lit(batch_id))
           .withColumn("load_type", F.lit(load_type))
     )
-    if source_file_col is None:
-        out = out.withColumn("source_file", F.input_file_name())
+    if "source_file" not in out.columns:
+        out = out.withColumn("source_file", F.lit("UNKNOWN"))
     return out
 
 

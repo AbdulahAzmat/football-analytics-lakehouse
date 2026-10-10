@@ -34,15 +34,24 @@ LAYER = "Raw-to-Bronze"
 
 
 def read_raw(spark: SparkSession, feed: str, path: str) -> DataFrame:
-    """Read with an explicit schema. inferSchema is never used."""
+    """Read with an explicit schema. inferSchema is never used.
+
+    `source_file` is materialised here, at read time, from the hidden
+    `_metadata` column. Two reasons it has to happen here and not later:
+
+      * Unity Catalog rejects input_file_name() outright
+        (UC_COMMAND_NOT_SUPPORTED), so _metadata.file_path is the only way to
+        know which file a row came from on a UC workspace.
+      * _metadata is only resolvable against the file scan itself. Once the
+        frame has been exploded or aggregated it is gone, so it is captured as
+        an ordinary column immediately and carried through the flatteners.
+    """
     if feed not in RAW_SCHEMAS:
         raise ValueError(f"unknown feed {feed!r}; known: {sorted(RAW_SCHEMAS)}")
-    reader = spark.read.schema(RAW_SCHEMAS[feed]).option("mode", "PERMISSIVE")
-    if feed in ARRAY_ROOTED:
-        reader = reader.option("multiLine", "true")
-    else:
-        reader = reader.option("multiLine", "true")
-    return reader.json(path)
+    reader = (spark.read.schema(RAW_SCHEMAS[feed])
+              .option("mode", "PERMISSIVE")
+              .option("multiLine", "true"))   # both root shapes need this
+    return reader.json(path).withColumn("source_file", F.col("_metadata.file_path"))
 
 
 # --------------------------------------------------------------------------
@@ -50,7 +59,9 @@ def read_raw(spark: SparkSession, feed: str, path: str) -> DataFrame:
 # --------------------------------------------------------------------------
 
 def _fd_matches(df: DataFrame) -> DataFrame:
-    m = df.select(F.explode("matches").alias("m"), F.col("competition.code").alias("file_competition_code"))
+    m = df.select(F.explode("matches").alias("m"),
+                  F.col("competition.code").alias("file_competition_code"),
+                  F.col("source_file"))
     return m.select(
         F.col("m.id").alias("match_id"),
         F.coalesce(F.col("m.competition.code"), F.col("file_competition_code")).alias("competition_code"),
@@ -79,6 +90,7 @@ def _fd_matches(df: DataFrame) -> DataFrame:
         F.col("m.score.halfTime.home").alias("half_time_home"),
         F.col("m.score.halfTime.away").alias("half_time_away"),
         F.col("m.referees").alias("referees"),
+        F.col("source_file"),
     )
 
 
@@ -87,15 +99,17 @@ def _fd_standings(df: DataFrame) -> DataFrame:
         F.col("competition.code").alias("competition_code"),
         F.col("competition.id").alias("competition_id"),
         F.col("season.id").alias("season_id"),
+        F.col("source_file"),
         F.explode("standings").alias("st"),
     )
-    r = s.select("competition_code", "competition_id", "season_id",
+    r = s.select("competition_code", "competition_id", "season_id", "source_file",
                  F.col("st.stage").alias("stage"),
                  F.col("st.type").alias("standing_type"),
                  F.coalesce(F.col("st.group"), F.lit("NONE")).alias("group_name"),
                  F.explode("st.table").alias("row"))
     return r.select(
         "competition_code", "competition_id", "season_id", "stage", "standing_type", "group_name",
+        "source_file",
         F.col("row.position").alias("position"),
         F.col("row.team.id").alias("team_id"),
         F.col("row.team.name").alias("team_name"),
@@ -116,10 +130,11 @@ def _fd_scorers(df: DataFrame) -> DataFrame:
     s = df.select(
         F.col("competition.code").alias("competition_code"),
         F.col("season.id").alias("season_id"),
+        F.col("source_file"),
         F.explode("scorers").alias("sc"),
     )
     return s.select(
-        "competition_code", "season_id",
+        "competition_code", "season_id", "source_file",
         F.col("sc.player.id").alias("player_id"),
         F.col("sc.player.name").alias("player_name"),
         F.col("sc.player.dateOfBirth").alias("player_date_of_birth"),
@@ -138,10 +153,11 @@ def _fd_teams(df: DataFrame) -> DataFrame:
     t = df.select(
         F.col("competition.code").alias("competition_code"),
         F.col("season.id").alias("season_id"),
+        F.col("source_file"),
         F.explode("teams").alias("t"),
     )
     return t.select(
-        "competition_code", "season_id",
+        "competition_code", "season_id", "source_file",
         F.col("t.id").alias("team_id"),
         F.col("t.name").alias("team_name"),
         F.col("t.shortName").alias("team_short_name"),
@@ -183,13 +199,17 @@ def _sb_matches(df: DataFrame) -> DataFrame:
         F.col("stadium.name").alias("stadium_name"),
         F.col("referee.name").alias("referee_name"),
         F.col("last_updated").alias("source_last_updated"),
+        F.col("source_file"),
     )
 
 
 def _match_id_from_filename():
     """StatsBomb events/lineups files do not carry match_id inside the records;
-    it is only in the filename (events/3895292.json). Recover it from the path."""
-    return F.regexp_extract(F.input_file_name(), r"/(\d+)\.json", 1).cast("long")
+    it is only in the filename (events/3895292.json). Recover it from the path.
+
+    Uses the source_file column materialised in read_raw rather than
+    input_file_name(), which Unity Catalog refuses to run."""
+    return F.regexp_extract(F.col("source_file"), r"/(\d+)\.json", 1).cast("long")
 
 
 def _sb_events(df: DataFrame) -> DataFrame:
@@ -250,6 +270,7 @@ def _sb_events(df: DataFrame) -> DataFrame:
         F.col("goalkeeper.type.name").alias("goalkeeper_action"),
         F.col("foul_committed.card.name").alias("foul_card"),
         F.col("substitution.replacement.name").alias("substitution_replacement"),
+        F.col("source_file"),
     )
 
 
@@ -258,10 +279,11 @@ def _sb_lineups(df: DataFrame) -> DataFrame:
         _match_id_from_filename().alias("match_id"),
         F.col("team_id"),
         F.col("team_name"),
+        F.col("source_file"),
         F.explode("lineup").alias("p"),
     )
     return base.select(
-        "match_id", "team_id", "team_name",
+        "match_id", "team_id", "team_name", "source_file",
         F.col("p.player_id").alias("player_id"),
         F.col("p.player_name").alias("player_name"),
         F.col("p.player_nickname").alias("player_nickname"),
