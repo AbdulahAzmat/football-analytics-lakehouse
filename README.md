@@ -810,12 +810,22 @@ Note `load_timestamp` is deliberately distinct from `source_last_updated`, which
 | `load_type` | string |  |
 ---
 
-## 7. Attribution and licensing
+## 7. Not in this submission
+
+The Gold layer is Phase 3 scope and is deliberately not built yet. The intended
+star schema is `fact_matches` and `fact_top_scorers` over conformed
+`dim_team`, `dim_competition`, `dim_date` and `dim_player`, with
+`agg_team_season_performance` and `agg_home_away_split` on top. Nothing in this
+repository claims it exists.
+
+---
+
+## 8. Attribution and licensing
 
 - **football-data.org** — free tier, personal API key. Key is read from the `FOOTBALL_DATA_TOKEN` environment variable and is never committed.
 - **StatsBomb open data** — free for public use under the StatsBomb user agreement, which requires attribution. Data provided by StatsBomb.
 
-## 8. Team
+## 9. Team
 
 | | |
 |---|---|
