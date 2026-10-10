@@ -59,36 +59,38 @@ def table_exists(spark: SparkSession, path: str, fmt: str | None = None) -> bool
     """
     fmt = fmt or config.TABLE_FORMAT
 
-    if fmt == "delta":
-        from delta.tables import DeltaTable
-        if DeltaTable.isDeltaTable(spark, path):
-            return True
-        # Not a Delta table: either nothing is there, or something non-Delta is.
-        try:
-            jvm = spark.sparkContext._jvm
-            jsc = spark.sparkContext._jsc.hadoopConfiguration()
-            p = jvm.org.apache.hadoop.fs.Path(path)
-            fs = p.getFileSystem(jsc)
-            if fs.exists(p):
-                raise TableProbeError(
-                    f"{path} exists but is not a Delta table. Refusing to overwrite it."
-                )
-            return False
-        except TableProbeError:
-            raise
-        except Exception as e:  # noqa: BLE001
-            raise TableProbeError(f"could not probe {path}: {e}") from e
-
+    # Deliberately no JVM access here. Serverless and Standard access mode
+    # block spark.sparkContext._jvm (JVM_ATTRIBUTE_NOT_SUPPORTED), so the
+    # existence check has to be expressible in pure DataFrame API. Attempting
+    # the read and classifying the failure does that, and works identically on
+    # serverless, classic clusters and local Spark.
     try:
         spark.read.format(fmt).load(path).limit(1).collect()
         return True
     except Exception as e:  # noqa: BLE001
         msg = str(e).lower()
-        not_found = ("path does not exist" in msg or "path_not_found" in msg
-                     or "no such file" in msg or "is not a parquet file" in msg
-                     or "unable to infer schema" in msg)
-        if not_found:
+
+        # Nothing there yet: this is the normal first-run case.
+        if any(s in msg for s in (
+            "path does not exist", "path_not_found", "no such file",
+            "delta_path_does_not_exist", "doesn't exist", "does not exist",
+            "unable to infer schema",
+        )):
             return False
+
+        # Something IS there but it is not the format we expect. Returning
+        # False here would send upsert() down its create-new path, which writes
+        # with mode("overwrite") and would destroy whatever is sitting there.
+        if any(s in msg for s in (
+            "is not a delta table", "delta_missing_delta_table",
+            "is not a parquet file",
+        )):
+            raise TableProbeError(
+                f"{path} exists but is not a {fmt} table. Refusing to overwrite it."
+            ) from e
+
+        # Permissions, expired credentials, transient storage errors: fail
+        # loudly rather than silently overwriting.
         raise TableProbeError(f"could not probe {path}: {e}") from e
 
 
