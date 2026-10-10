@@ -1,5 +1,13 @@
 # Volume & Frequency (Section 2.2)
 
+> **Phase 1 document, superseded.** The figures below describe the project as it
+> stood at the Phase 1 proposal, when football-data.org was the only source.
+> Phase 1 review correctly judged that volume too small, and Phase 2 added
+> StatsBomb open data and daily snapshotting in response. Current figures are
+> 249.9 MB full load and ~1.6 MB a day; see the README. This file is kept
+> because it is what the review was responding to.
+
+
 These are measured figures from a real full pull, not projections. The complete historical extraction was run on 2026-09-27 against the live API.
 
 ## Full load, as actually pulled
