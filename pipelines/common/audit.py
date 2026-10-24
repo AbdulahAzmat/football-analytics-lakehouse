@@ -39,7 +39,7 @@ from . import config
 EXECUTION_LOG_SCHEMA = StructType([
     StructField("log_id", StringType(), False),           # PK, uuid4
     StructField("batch_id", StringType(), False),
-    StructField("layer", StringType(), False),            # Raw-to-Bronze | Bronze-to-Silver
+    StructField("layer", StringType(), False),            # Raw-to-Bronze | Bronze-to-Silver | Silver-to-Gold | Gold-Validation | Gold-Optimize
     StructField("table_name", StringType(), False),
     StructField("parameter", StringType(), True),         # file/date/path processed
     StructField("load_type", StringType(), False),        # FULL | INCREMENTAL

@@ -32,6 +32,7 @@ from pyspark.sql import functions as F  # noqa: E402
 
 from pipelines.bronze import raw_to_bronze  # noqa: E402
 from pipelines.silver import bronze_to_silver  # noqa: E402
+from pipelines.gold import silver_to_gold  # noqa: E402
 from pipelines.common import config  # noqa: E402
 from pipelines.common.audit import new_batch_id  # noqa: E402
 
@@ -97,11 +98,14 @@ def main():
     s1 = new_batch_id("silver")
     for tbl, snap in SILVER_JOBS:
         bronze_to_silver.run_table(spark, tbl, s1, "FULL", snap)
+    silver_to_gold.run_all(spark, s1, "FULL", optimize=False)
 
     bronze_tables = [raw_to_bronze.TARGET_TABLE[f] for f, *_ in BRONZE_JOBS]
     silver_tables = [t for t, _ in SILVER_JOBS]
     c1_b = counts(spark, "bronze", bronze_tables)
     c1_s = counts(spark, "silver", silver_tables)
+    gold_tables = silver_to_gold.GOLD_TABLES
+    c1_g = counts(spark, "gold", gold_tables)
 
     print()
     print("=" * 66)
@@ -113,9 +117,11 @@ def main():
     s2 = new_batch_id("silver")
     for tbl, snap in SILVER_JOBS:
         bronze_to_silver.run_table(spark, tbl, s2, "FULL", snap)
+    silver_to_gold.run_all(spark, s2, "FULL", optimize=False)
 
     c2_b = counts(spark, "bronze", bronze_tables)
     c2_s = counts(spark, "silver", silver_tables)
+    c2_g = counts(spark, "gold", gold_tables)
 
     print()
     print("=" * 66)
@@ -123,9 +129,9 @@ def main():
     print("=" * 66)
     ok = True
     print(f"{'table':26} {'pass1':>10} {'pass2':>10}   idempotent")
-    for t in bronze_tables + silver_tables:
-        a = (c1_b | c1_s).get(t)
-        b = (c2_b | c2_s).get(t)
+    for t in bronze_tables + silver_tables + gold_tables:
+        a = (c1_b | c1_s | c1_g).get(t)
+        b = (c2_b | c2_s | c2_g).get(t)
         good = (a is not None and a == b)
         ok = ok and good
         print(f"{t:26} {str(a):>10} {str(b):>10}   {'YES' if good else 'NO  <-- FAIL'}")

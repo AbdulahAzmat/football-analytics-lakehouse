@@ -17,6 +17,7 @@ RAW_ROOT = os.environ.get("RAW_ROOT", f"{LAKE_ROOT}/raw")
 
 BRONZE_ROOT = f"{LAKE_ROOT}/bronze"
 SILVER_ROOT = f"{LAKE_ROOT}/silver"
+GOLD_ROOT = f"{LAKE_ROOT}/gold"
 QUARANTINE_ROOT = f"{LAKE_ROOT}/quarantine"
 OPS_ROOT = f"{LAKE_ROOT}/ops"
 
@@ -61,6 +62,18 @@ MERGE_KEYS = {
     "silver_events":        ["event_id"],
     "silver_lineups":       ["match_id", "team_id", "player_id"],
     "silver_sb_matches":    ["match_id"],
+
+    # Gold. Dimensions are keyed on their deterministic surrogate key, facts on
+    # their grain. Aggregates are not listed: they are fully recomputed
+    # (overwrite), because a late score correction changes every cumulative
+    # figure after it, so there is no row-level key to merge on.
+    "dim_competition":      ["competition_key"],
+    "dim_season":           ["season_key"],
+    "dim_team":             ["team_key"],
+    "dim_player":           ["player_key"],
+    "fact_matches":         ["match_id"],
+    "fact_team_match":      ["match_id", "venue"],
+    "fact_top_scorers":     ["competition_key", "snapshot_date_key", "player_key"],
 }
 
 # Columns every table carries (requirement: metadata integration).
@@ -71,6 +84,7 @@ def table_path(layer: str, table: str) -> str:
     roots = {
         "bronze": BRONZE_ROOT,
         "silver": SILVER_ROOT,
+        "gold": GOLD_ROOT,
         "quarantine": QUARANTINE_ROOT,
         "ops": OPS_ROOT,
     }
