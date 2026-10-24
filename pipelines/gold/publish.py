@@ -45,6 +45,7 @@ def _quarantine_summary(spark: SparkSession):
     for t in QUARANTINE_TABLES:
         try:
             q = spark.read.format(config.TABLE_FORMAT).load(config.table_path("quarantine", t))
+            q.limit(1).collect()
             frames.append(q.select(F.lit(t).alias("source_table"), "quarantine_reason", "batch_id",
                                    F.to_date("quarantined_at").alias("quarantine_date")))
         except Exception:  # noqa: BLE001 - no quarantine table means nothing was rejected
