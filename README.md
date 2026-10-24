@@ -58,6 +58,9 @@ bronze/        One row per business entity. Explicit schema, flattened,
 silver/        Typed, cast, deduplicated, business rules applied.
                Non-conforming rows diverted to quarantine.
 
+gold/          Star schema for BI: 5 dimensions, 3 facts, 3 aggregates.
+               MERGE for dims/facts, overwrite for aggregates. See section 7.
+
 quarantine/    Rows that failed the contract, with the reason and batch id.
 
 ops/
@@ -77,6 +80,10 @@ pipelines/
   common/io_utils.py      idempotent upsert (MERGE INTO), quarantine, drift split
   bronze/raw_to_bronze.py Raw -> Bronze, one flattener per feed
   silver/bronze_to_silver.py  Bronze -> Silver, casting + business rules
+  gold/silver_to_gold.py  Silver -> Gold star schema, validation, OPTIMIZE
+  run_pipeline.py         Bronze -> Silver -> Gold as stages of one run
+workflows/
+  football_lakehouse_daily_job.json   Databricks Workflow: 3 dependent tasks, daily
 scripts/
   ingest_statsbomb.py     downloads the StatsBomb source
   daily_snapshot.py       daily incremental snapshot from football-data.org
@@ -820,13 +827,36 @@ Note `load_timestamp` is deliberately distinct from `source_last_updated`, which
 | `load_type` | string |  |
 ---
 
-## 7. Not in this submission
+## 7. Gold layer (Phase 3)
 
-The Gold layer is Phase 3 scope and is deliberately not built yet. The intended
-star schema is `fact_matches` and `fact_top_scorers` over conformed
-`dim_team`, `dim_competition`, `dim_date` and `dim_player`, with
-`agg_team_season_performance` and `agg_home_away_split` on top. Nothing in this
-repository claims it exists.
+A star schema over the football-data.org Silver tables, built by
+`pipelines/gold/silver_to_gold.py`. Full dictionary, ER diagram and design
+decisions: [`docs/gold_data_dictionary.md`](docs/gold_data_dictionary.md).
+
+| Type | Tables |
+|---|---|
+| Dimensions | `dim_date`, `dim_competition`, `dim_season`, `dim_team`, `dim_player` |
+| Facts | `fact_matches` (per match), `fact_team_match` (per team per match), `fact_top_scorers` |
+| Aggregates | `agg_team_season_performance`, `agg_home_away_split`, `agg_team_matchday_progress` |
+
+Dimensions and facts are MERGEd on their key, aggregates are overwritten, and
+every table writes to the same execution log (layer `Silver-to-Gold`).
+`validate_gold()` then checks grain uniqueness and foreign-key integrity, and
+`optimize_gold()` applies liquid clustering / `OPTIMIZE` on Delta.
+
+Run it as the last stage of the pipeline:
+
+```bash
+python -m pipelines.gold.silver_to_gold --load-type INCREMENTAL      # Gold only
+```
+
+or end to end (Bronze -> Silver -> Gold under one batch id) with
+`pipelines/run_pipeline.py`, the `notebooks/job_daily_pipeline.py` notebook, or
+the Databricks Workflow in `workflows/football_lakehouse_daily_job.json`.
+`notebooks/run_phase3_gold_databricks.py` is the evidence notebook.
+
+Not yet in the repository: the Power BI / Tableau dashboard, the Spark UI DAG
+analysis and the final PDF report.
 
 ---
 

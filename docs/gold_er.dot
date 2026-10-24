@@ -1,0 +1,90 @@
+digraph gold {
+  graph [rankdir=LR, fontname="Helvetica", nodesep=0.35, ranksep=1.1, pad=0.3, bgcolor="white"];
+  node  [shape=plain, fontname="Helvetica", fontsize=10];
+  edge  [fontname="Helvetica", fontsize=8, color="#555555", arrowhead=crowodot, arrowtail=tee, dir=both];
+
+  dim_date [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4">
+    <TR><TD BGCOLOR="#1f4e79"><FONT COLOR="white"><B>dim_date</B></FONT></TD></TR>
+    <TR><TD ALIGN="LEFT"><B>PK date_key</B> int (yyyymmdd)</TD></TR>
+    <TR><TD ALIGN="LEFT">full_date, year, quarter, month,<BR ALIGN="LEFT"/>month_name, day_of_month, day_of_week,<BR ALIGN="LEFT"/>day_name, iso_week, is_weekend<BR ALIGN="LEFT"/></TD></TR></TABLE>>];
+
+  dim_competition [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4">
+    <TR><TD BGCOLOR="#1f4e79"><FONT COLOR="white"><B>dim_competition</B></FONT></TD></TR>
+    <TR><TD ALIGN="LEFT"><B>PK competition_key</B> int</TD></TR>
+    <TR><TD ALIGN="LEFT">competition_code, competition_id,<BR ALIGN="LEFT"/>competition_name, competition_type, country<BR ALIGN="LEFT"/></TD></TR></TABLE>>];
+
+  dim_season [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4">
+    <TR><TD BGCOLOR="#1f4e79"><FONT COLOR="white"><B>dim_season</B></FONT></TD></TR>
+    <TR><TD ALIGN="LEFT"><B>PK season_key</B> int</TD></TR>
+    <TR><TD ALIGN="LEFT">season_label, season_start_year, is_current<BR ALIGN="LEFT"/></TD></TR></TABLE>>];
+
+  dim_team [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4">
+    <TR><TD BGCOLOR="#1f4e79"><FONT COLOR="white"><B>dim_team</B></FONT></TD></TR>
+    <TR><TD ALIGN="LEFT"><B>PK team_key</B> int</TD></TR>
+    <TR><TD ALIGN="LEFT">team_id, team_name, team_short_name, team_tla,<BR ALIGN="LEFT"/>founded, club_colors, home_venue, country,<BR ALIGN="LEFT"/>coach_name, is_inferred<BR ALIGN="LEFT"/></TD></TR></TABLE>>];
+
+  dim_player [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4">
+    <TR><TD BGCOLOR="#1f4e79"><FONT COLOR="white"><B>dim_player</B></FONT></TD></TR>
+    <TR><TD ALIGN="LEFT"><B>PK player_key</B> int</TD></TR>
+    <TR><TD ALIGN="LEFT">player_id, player_name, player_position<BR ALIGN="LEFT"/>(no date of birth, no nationality)<BR ALIGN="LEFT"/></TD></TR></TABLE>>];
+
+  fact_matches [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4">
+    <TR><TD BGCOLOR="#a64d00"><FONT COLOR="white"><B>fact_matches</B>  (grain: one match)</FONT></TD></TR>
+    <TR><TD ALIGN="LEFT"><B>PK match_id</B> (degenerate)</TD></TR>
+    <TR><TD ALIGN="LEFT">FK date_key, competition_key, season_key,<BR ALIGN="LEFT"/>FK home_team_key, away_team_key<BR ALIGN="LEFT"/>matchday, stage, group_name, match_status, is_finished,<BR ALIGN="LEFT"/>home_goals, away_goals, *_ht, total_goals,<BR ALIGN="LEFT"/>goal_difference, result, home_points, away_points<BR ALIGN="LEFT"/></TD></TR></TABLE>>];
+
+  fact_team_match [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4">
+    <TR><TD BGCOLOR="#a64d00"><FONT COLOR="white"><B>fact_team_match</B>  (grain: one team in one match)</FONT></TD></TR>
+    <TR><TD ALIGN="LEFT"><B>PK match_id + venue</B></TD></TR>
+    <TR><TD ALIGN="LEFT">FK team_key, opponent_key, date_key,<BR ALIGN="LEFT"/>FK competition_key, season_key<BR ALIGN="LEFT"/>venue, matchday, stage, group_name, is_finished,<BR ALIGN="LEFT"/>goals_for, goals_against, goal_difference, result,<BR ALIGN="LEFT"/>points, is_clean_sheet<BR ALIGN="LEFT"/></TD></TR></TABLE>>];
+
+  fact_top_scorers [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4">
+    <TR><TD BGCOLOR="#a64d00"><FONT COLOR="white"><B>fact_top_scorers</B>  (grain: player, competition, snapshot)</FONT></TD></TR>
+    <TR><TD ALIGN="LEFT"><B>PK competition_key + snapshot_date_key + player_key</B></TD></TR>
+    <TR><TD ALIGN="LEFT">FK player_key, team_key, competition_key,<BR ALIGN="LEFT"/>FK season_key, snapshot_date_key<BR ALIGN="LEFT"/>played_matches, goals, assists, penalties,<BR ALIGN="LEFT"/>non_penalty_goals, goals_per_match<BR ALIGN="LEFT"/></TD></TR></TABLE>>];
+
+  agg_team_season_performance [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4">
+    <TR><TD BGCOLOR="#2e7d32"><FONT COLOR="white"><B>agg_team_season_performance</B></FONT></TD></TR>
+    <TR><TD ALIGN="LEFT"><B>PK team_key + competition_key + season_key</B></TD></TR>
+    <TR><TD ALIGN="LEFT">matches_played, wins, draws, losses, goals_for,<BR ALIGN="LEFT"/>goals_against, goal_difference, points,<BR ALIGN="LEFT"/>points_per_game, win_rate, season_rank<BR ALIGN="LEFT"/></TD></TR></TABLE>>];
+
+  agg_home_away_split [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4">
+    <TR><TD BGCOLOR="#2e7d32"><FONT COLOR="white"><B>agg_home_away_split</B></FONT></TD></TR>
+    <TR><TD ALIGN="LEFT"><B>PK team_key + competition_key + season_key + venue</B></TD></TR>
+    <TR><TD ALIGN="LEFT">matches_played, wins, draws, losses, goals_for,<BR ALIGN="LEFT"/>goals_against, avg_goals_for, avg_goals_against,<BR ALIGN="LEFT"/>win_rate, draw_rate, loss_rate, points_per_game<BR ALIGN="LEFT"/></TD></TR></TABLE>>];
+
+  agg_team_matchday_progress [label=<<TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4">
+    <TR><TD BGCOLOR="#2e7d32"><FONT COLOR="white"><B>agg_team_matchday_progress</B></FONT></TD></TR>
+    <TR><TD ALIGN="LEFT"><B>PK team, competition, season, stage, group, matchday</B></TD></TR>
+    <TR><TD ALIGN="LEFT">points, goals_for, goals_against, cumulative_points,<BR ALIGN="LEFT"/>cumulative_goals_for/against, cumulative_goal_difference,<BR ALIGN="LEFT"/>league_position<BR ALIGN="LEFT"/></TD></TR></TABLE>>];
+
+  dim_date -> fact_matches [label="date_key"];
+  dim_competition -> fact_matches [label="competition_key"];
+  dim_season -> fact_matches [label="season_key"];
+  dim_team -> fact_matches [label="home_team_key / away_team_key\n(role-playing)"];
+
+  dim_date -> fact_team_match [label="date_key"];
+  dim_competition -> fact_team_match [label="competition_key"];
+  dim_season -> fact_team_match [label="season_key"];
+  dim_team -> fact_team_match [label="team_key (active)\nopponent_key (inactive)"];
+
+  dim_date -> fact_top_scorers [label="snapshot_date_key"];
+  dim_competition -> fact_top_scorers [label="competition_key"];
+  dim_season -> fact_top_scorers [label="season_key"];
+  dim_team -> fact_top_scorers [label="team_key"];
+  dim_player -> fact_top_scorers [label="player_key"];
+
+  dim_team -> agg_team_season_performance [label="team_key"];
+  dim_competition -> agg_team_season_performance [label="competition_key"];
+  dim_season -> agg_team_season_performance [label="season_key"];
+  dim_team -> agg_home_away_split [label="team_key"];
+  dim_competition -> agg_home_away_split [label="competition_key"];
+  dim_season -> agg_home_away_split [label="season_key"];
+  dim_team -> agg_team_matchday_progress [label="team_key"];
+  dim_competition -> agg_team_matchday_progress [label="competition_key"];
+  dim_season -> agg_team_matchday_progress [label="season_key"];
+
+  fact_team_match -> agg_team_season_performance [style=dashed, arrowhead=none, arrowtail=none, dir=none, color="#2e7d32", label="derived from"];
+  fact_team_match -> agg_home_away_split [style=dashed, arrowhead=none, arrowtail=none, dir=none, color="#2e7d32"];
+  fact_team_match -> agg_team_matchday_progress [style=dashed, arrowhead=none, arrowtail=none, dir=none, color="#2e7d32"];
+}
