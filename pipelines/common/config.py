@@ -21,6 +21,18 @@ GOLD_ROOT = f"{LAKE_ROOT}/gold"
 QUARANTINE_ROOT = f"{LAKE_ROOT}/quarantine"
 OPS_ROOT = f"{LAKE_ROOT}/ops"
 
+# Unity Catalog location the BI tool reads from. The pipeline keeps its tables as
+# Delta files under LAKE_ROOT (path-based), which a BI tool cannot browse by name,
+# so Gold and the audit tables are also published as catalog tables. The catalog
+# is taken from the volume path (/Volumes/<catalog>/<schema>/...) unless overridden.
+def _volume_catalog():
+    parts = LAKE_ROOT.split("/")
+    return parts[2] if LAKE_ROOT.startswith("/Volumes/") and len(parts) > 2 else None
+
+
+PUBLISH_CATALOG = os.environ.get("PUBLISH_CATALOG", _volume_catalog())
+PUBLISH_SCHEMA = os.environ.get("PUBLISH_SCHEMA", "football_gold")
+
 # Audit table (requirement: dedicated logging tables)
 EXECUTION_LOG_PATH = f"{OPS_ROOT}/pipeline_execution_logs"
 

@@ -25,7 +25,7 @@ from pyspark.sql import SparkSession
 
 from .bronze import raw_to_bronze
 from .common.audit import new_batch_id
-from .gold import silver_to_gold
+from .gold import publish, silver_to_gold
 from .silver import bronze_to_silver
 
 STAGES = ("bronze", "silver", "gold")
@@ -70,7 +70,8 @@ def silver_jobs(load_type: str, snapshot_date: str):
 
 def run_stage(spark: SparkSession, stage: str, load_type: str, raw_root: str,
               snapshot_date: str, batch_id: str, base_dir: str | None = None,
-              matches_glob: str | None = None, optimize: bool = True) -> None:
+              matches_glob: str | None = None, optimize: bool = True,
+              publish_tables: bool = True) -> None:
     if stage not in STAGES:
         raise ValueError(f"unknown stage {stage!r}; expected one of {STAGES}")
 
@@ -82,16 +83,19 @@ def run_stage(spark: SparkSession, stage: str, load_type: str, raw_root: str,
             bronze_to_silver.run_table(spark, table, batch_id, load_type, snap)
     else:
         silver_to_gold.run_all(spark, batch_id, load_type, optimize=optimize)
+        if publish_tables:
+            # last step of the run: refresh the catalog tables Power BI reads
+            publish.publish_to_catalog(spark, batch_id, load_type)
 
 
 def run_end_to_end(spark: SparkSession, load_type: str, raw_root: str,
                    snapshot_date: str | None = None, batch_id: str | None = None,
                    base_dir: str | None = None, matches_glob: str | None = None,
-                   optimize: bool = True) -> str:
+                   optimize: bool = True, publish_tables: bool = True) -> str:
     """Bronze -> Silver -> Gold under one batch id. Returns the batch id."""
     snapshot_date = snapshot_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     batch_id = batch_id or new_batch_id(f"e2e_{load_type.lower()}")
     for stage in STAGES:
         run_stage(spark, stage, load_type, raw_root, snapshot_date, batch_id,
-                  base_dir, matches_glob, optimize)
+                  base_dir, matches_glob, optimize, publish_tables)
     return batch_id
